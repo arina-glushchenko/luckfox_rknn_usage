@@ -12,10 +12,16 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 set(RKNN_API_PATH ${CMAKE_SOURCE_DIR}/include/lib/librknn_api)
 set(RKNN_RT_LIB ${RKNN_API_PATH}/armhf-uclibc/librknnmrt.so)
 
+# Настройка OpenCV
+set(OpenCV_DIR ${CMAKE_SOURCE_DIR}/include/lib/opencv-mobile-4.10.0-luckfox-pico/lib/cmake/opencv4)
+find_package(OpenCV REQUIRED)
+include_directories(${OpenCV_INCLUDE_DIRS})
+message(STATUS "OpenCV_LIBS=${OpenCV_LIBS}")
 
+# Директории для заголовочных файлов
 include_directories(
     ${RKNN_API_PATH}/include
-    ${CMAKE_SOURCE_DIR}/include 
+    ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/include/lib
     ${CMAKE_SOURCE_DIR}/include/stb
 )
@@ -25,7 +31,7 @@ add_definitions(-DSTB_IMAGE_IMPLEMENTATION)
 add_definitions(-DSTB_IMAGE_WRITE_IMPLEMENTATION)
 add_definitions(-DSTB_IMAGE_RESIZE_IMPLEMENTATION)
 
-# Исполняемый файл
+# Исходные файлы
 set(SOURCES
     src/main.cc
 )
@@ -33,10 +39,10 @@ set(SOURCES
 # Создание исполняемого файла
 add_executable(rknn_demo ${SOURCES})
 
-
-# Библиотеки для линковки
+# Линковка библиотек
 target_link_libraries(rknn_demo
     ${RKNN_RT_LIB}
+    ${OpenCV_LIBS}  # Добавляем библиотеки OpenCV
     m
 )
 

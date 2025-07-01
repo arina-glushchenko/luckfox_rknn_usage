@@ -3,65 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
-
-// Подключение библиотеки STB для работы с изображениями
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb/stb_image.h"
-#define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include "stb/stb_image_resize.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb/stb_image_write.h"
-
-/* ==============================================
- * Функции для работы с файлами и изображениями
- * ============================================== */
-
-/**
- * Загрузка файла в память
- * @param path Путь к файлу
- * @param size_out Указатель для возврата размера файла
- * @return Указатель на данные файла или NULL при ошибке
- */
-static void* load_file(const char *path, size_t *size_out) {
-    FILE *fp = fopen(path, "rb");
-    if (!fp) return NULL;
-    
-    fseek(fp, 0, SEEK_END);
-    size_t size = ftell(fp);
-    rewind(fp);
-    
-    void *data = malloc(size);
-    fread(data, 1, size, fp);
-    fclose(fp);
-    
-    *size_out = size;
-    return data;
-}
-
-/**
- * Загрузка и изменение размера изображения
- * @param img_path Путь к изображению
- * @param target_h Целевая высота
- * @param target_w Целевая ширина
- * @param channels Количество каналов
- * @return Указатель на данные изображения или NULL при ошибке
- */
-static unsigned char* load_and_resize_image(const char *img_path, int target_h, int target_w, int channels) {
-    int w, h, c;
-    unsigned char *input_img = stbi_load(img_path, &w, &h, &c, channels);
-    if (!input_img) {
-        printf("Failed to load image: %s\n", img_path);
-        return NULL;
-    }
-
-    unsigned char *resized = (unsigned char*)malloc(target_h * target_w * channels);
-    stbir_resize_uint8(input_img, w, h, 0, resized, target_w, target_h, 0, channels);
-    stbi_image_free(input_img);
-    
-    printf("Loaded image %s (%d x %d x %d), resized to %d x %d x %d\n", 
-           img_path, w, h, c, target_w, target_h, channels);
-    return resized;
-}
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+#include "stb_image.h"
+#include "stb_image_write.h"
 
 /* ==============================================
  * Вспомогательные функции
@@ -78,35 +23,29 @@ static inline int64_t get_time_us() {
 }
 
 /**
- * Сохранение маски сегментации в PNG файл
+ * Сохранение маски сегментации в PNG файл с использованием stb_image_write
  * @param filename Имя файла для сохранения
  * @param mask Указатель на данные маски
  * @param width Ширина изображения
  * @param height Высота изображения
  */
 void save_mask_as_png(const char* filename, const uint8_t* mask, int width, int height) {
-    // Цвета для различных классов (в формате RGB)
+    // Цвета для различных классов (в формате RGB, так как stb_image_write использует RGB)
     const uint8_t class_colors[2][3] = {
-        { 255, 0,   255 }, 
-        { 0,   0,   0   }  
+        { 255, 0, 255 }, // Фиолетовый для класса 0
+        { 0, 0, 0 }      // Черный для класса 1
     };
 
-    // Выделение памяти для RGB изображения
+    // Создание цветного изображения
     uint8_t* rgb_image = (uint8_t*)malloc(width * height * 3);
-    if (!rgb_image) {
-        printf("Failed to allocate memory for PNG\n");
-        return;
-    }
-
-    // Преобразование маски классов в цветное изображение
     for (int i = 0; i < width * height; ++i) {
         uint8_t class_id = mask[i];
-        rgb_image[i * 3 + 0] = class_colors[class_id][0];
-        rgb_image[i * 3 + 1] = class_colors[class_id][1];
-        rgb_image[i * 3 + 2] = class_colors[class_id][2];
+        rgb_image[i * 3 + 0] = class_colors[class_id][0]; // R
+        rgb_image[i * 3 + 1] = class_colors[class_id][1]; // G
+        rgb_image[i * 3 + 2] = class_colors[class_id][2]; // B
     }
 
-    // Сохранение изображения
+    // Сохранение изображения с помощью stb_image_write
     if (stbi_write_png(filename, width, height, 3, rgb_image, width * 3)) {
         printf("Saved colored mask: %s\n", filename);
     } else {
@@ -137,12 +76,19 @@ int main(int argc, char **argv) {
     start = get_time_us();
     
     // Загрузка модели
-    size_t model_size;
-    void *model_data = load_file(model_path, &model_size);
-    if (!model_data) {
-        printf("Failed to load model file.\n");
+    FILE *fp = fopen(model_path, "rb");
+    if (!fp) {
+        printf("Failed to open model file: %s\n", model_path);
         return -1;
     }
+    
+    fseek(fp, 0, SEEK_END);
+    size_t model_size = ftell(fp);
+    rewind(fp);
+    
+    void *model_data = malloc(model_size);
+    fread(model_data, 1, model_size, fp);
+    fclose(fp);
 
     // Инициализация контекста RKNN
     rknn_context ctx;
@@ -167,17 +113,49 @@ int main(int argc, char **argv) {
     int input_c = input_attr.dims[3];
     printf("Model input: %d x %d x %d\n", input_h, input_w, input_c);
 
-    // Загрузка и изменение размера входного изображения
-    unsigned char* input_data = load_and_resize_image(image_path, input_h, input_w, input_c);
-    if (!input_data) return -1;
+    // Загрузка входного изображения с помощью stb_image
+    int img_width, img_height, img_channels;
+    unsigned char *img_data = stbi_load(image_path, &img_width, &img_height, &img_channels, input_c);
+    if (!img_data) {
+        printf("Failed to load image: %s\n", image_path);
+        rknn_destroy(ctx);
+        return -1;
+    }
+
+    // Создание cv::Mat из загруженного изображения
+    cv::Mat input_img(img_height, img_width, CV_8UC3, img_data);
+    if (input_img.empty()) {
+        printf("Failed to create cv::Mat from image: %s\n", image_path);
+        stbi_image_free(img_data);
+        rknn_destroy(ctx);
+        return -1;
+    }
+
+    // Изменение размера изображения
+    cv::Mat resized_img;
+    cv::resize(input_img, resized_img, cv::Size(input_w, input_h), 0, 0, cv::INTER_LINEAR);
+    printf("Loaded image %s (%d x %d x %d), resized to %d x %d x %d\n", 
+           image_path, img_width, img_height, img_channels, 
+           input_w, input_h, input_c);
+
+    // Освобождение данных изображения
+    stbi_image_free(img_data);
+
+    // Проверка соответствия количества каналов
+    if (resized_img.channels() != input_c) {
+        printf("Image channels (%d) do not match model input channels (%d)\n", resized_img.channels(), input_c);
+        rknn_destroy(ctx);
+        return -1;
+    }
 
     // Выделение памяти и привязка входного тензора
     rknn_tensor_mem* input_mem = rknn_create_mem(ctx, input_h * input_w * input_c);
-    memcpy(input_mem->virt_addr, input_data, input_h * input_w * input_c);
-    free(input_data);
+    memcpy(input_mem->virt_addr, resized_img.data, input_h * input_w * input_c);
     ret = rknn_set_io_mem(ctx, input_mem, &input_attr);
     if (ret != RKNN_SUCC) {
         printf("rknn_set_io_mem failed: %d\n", ret);
+        rknn_destroy_mem(ctx, input_mem);
+        rknn_destroy(ctx);
         return -1;
     }
 
@@ -200,6 +178,9 @@ int main(int argc, char **argv) {
     ret = rknn_set_io_mem(ctx, output_mem, &output_attr);
     if (ret != RKNN_SUCC) {
         printf("rknn_set_io_mem (output) failed: %d\n", ret);
+        rknn_destroy_mem(ctx, input_mem);
+        rknn_destroy_mem(ctx, output_mem);
+        rknn_destroy(ctx);
         return -1;
     }
     
@@ -215,6 +196,9 @@ int main(int argc, char **argv) {
     end = get_time_us();
     if (ret != RKNN_SUCC) {
         printf("rknn_run failed: %d\n", ret);
+        rknn_destroy_mem(ctx, input_mem);
+        rknn_destroy_mem(ctx, output_mem);
+        rknn_destroy(ctx);
         return -1;
     }
     float infer_time = (end - start) / 1000.0f;
